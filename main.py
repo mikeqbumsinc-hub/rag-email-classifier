@@ -155,4 +155,9 @@ def classify(req: ClassifyRequest):
             stop_sequences=["\n"]
         )
         raw = gen.generations[0].text.strip().lower()
-        final = next((c for c in ["warm", "cold", "spam"] if c in raw), raw.split
+        final = next((c for c in ["warm", "cold", "spam"] if c in raw), raw.split()[0] if raw else "cold")
+    except Exception:
+        final = "cold"
+
+    avg_all = sum(n["score"] for n in neighbors) / max(1, len(neighbors))
+    return ClassifyResponse(label=final, score=avg_all, neighbors=neighbors)
