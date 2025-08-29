@@ -7,11 +7,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import cohere
 from dotenv import load_dotenv
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec  # Updated imports
 
 load_dotenv()
 
-# Configuration from environment
+# — env config —
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "email-leads")
@@ -22,24 +22,19 @@ PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 
 if not all([COHERE_API_KEY, PINECONE_API_KEY]):
-    raise RuntimeError("Missing one of COHERE_API_KEY or PINECONE_API_KEY")
+    raise RuntimeError("Missing COHERE_API_KEY or PINECONE_API_KEY")
 
-# Cohere client
+# — clients init —
 co = cohere.Client(COHERE_API_KEY)
-
-# Pinecone client
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Create index if needed (serverless)
+# — create index if missing (serverless) —
 if PINECONE_INDEX not in pc.list_indexes().names():
     pc.create_index(
         name=PINECONE_INDEX,
         dimension=EMBED_DIM,
         metric="cosine",
-        spec=ServerlessSpec(
-            cloud=PINECONE_CLOUD,
-            region=PINECONE_REGION
-        )
+        spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
     )
 index = pc.Index(PINECONE_INDEX)
 
@@ -61,7 +56,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
 def startup_upsert_training():
     TRAIN_FILE = os.getenv("TRAIN_FILE", "training_data.jsonl")
     if not os.path.exists(TRAIN_FILE):
-        logging.warning(f"No training file found at {TRAIN_FILE}, skipping embedding.")
+        logging.warning(f"No training file at {TRAIN_FILE}. Skipping.")
         return
 
     examples = []
@@ -74,7 +69,7 @@ def startup_upsert_training():
                 examples.append({"id": f"train-{i}", "text": text, "label": label})
 
     if not examples:
-        logging.warning("No valid training examples found.")
+        logging.warning("No examples found.")
         return
 
     BATCH = 32
@@ -87,11 +82,11 @@ def startup_upsert_training():
             vectors.append((e["id"], v, {"label": e["label"], "text": e["text"]}))
 
     index.upsert(vectors=vectors)
-    logging.info(f"Upserted {len(vectors)} examples into Pinecone.")
+    logging.info(f"Upserted {len(vectors)} examples.")
 
 def query_neighbors(embedding: List[float], top_k: int = TOP_K):
     resp = index.query(vector=embedding, top_k=top_k, include_metadata=True, include_values=False)
-    matches = [
+    return [
         {
             "id": m["id"],
             "score": m["score"],
@@ -100,14 +95,13 @@ def query_neighbors(embedding: List[float], top_k: int = TOP_K):
         }
         for m in resp.get("matches", [])
     ]
-    return matches
 
 def build_prompt(neighbors: List[Dict[str, Any]], incoming_text: str) -> str:
     lines = [
         "You are an assistant that classifies incoming email messages into warm, cold, or spam.",
-        "Return only the single-word label in lowercase (warm, cold, or spam)."
+        "Return only a single, lowercase label (warm, cold, or spam).",
+        "\nExamples:"
     ]
-    lines.append("\nExamples:")
     for n in neighbors:
         example = n["text"].replace("\n", " ").strip()
         lines.append(f"Label: {n['label']}\nEmail: {example}\n")
@@ -123,7 +117,7 @@ def classify(req: ClassifyRequest):
 
     try:
         emb = embed_texts([text])[0]
-    except Exception as e:
+    except Exception:
         logging.exception("Embedding failed")
         raise HTTPException(status_code=500, detail="Embedding failed")
 
@@ -134,16 +128,16 @@ def classify(req: ClassifyRequest):
         if lbl:
             label_counts[lbl] = label_counts.get(lbl, 0) + 1
 
-    majority_label = None
+    majority = None
     if label_counts:
         sorted_items = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)
         if len(sorted_items) == 1 or sorted_items[0][1] > sorted_items[1][1]:
-            majority_label = sorted_items[0][0]
+            majority = sorted_items[0][0]
 
-    if majority_label:
-        avg_score = sum(n["score"] for n in neighbors if n.get("label") == majority_label) / \
-                    max(1, sum(1 for n in neighbors if n.get("label") == majority_label))
-        return ClassifyResponse(label=majority_label, score=avg_score, neighbors=neighbors)
+    if majority:
+        avg_score = sum(n["score"] for n in neighbors if n.get("label") == majority) / \
+                    max(1, sum(1 for n in neighbors if n.get("label") == majority))
+        return ClassifyResponse(label=majority, score=avg_score, neighbors=neighbors)
 
     prompt = build_prompt(neighbors, text)
     try:
