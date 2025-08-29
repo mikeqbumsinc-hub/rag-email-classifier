@@ -1,7 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
+pydantic
 cohere
 pinecone-client
-pydantic
 python-dotenv
-httpx
