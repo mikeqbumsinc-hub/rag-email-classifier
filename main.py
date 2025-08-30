@@ -140,4 +140,9 @@ def classify(req: ClassifyRequest):
     try:
         gen = co.generate(model=COHERE_EMBED_MODEL, prompt=prompt, max_tokens=4, temperature=0.0, stop_sequences=["\n"])
         raw = gen.generations[0].text.strip().lower()
-        chosen = next((c for c in
+        chosen = next((c for c in ["warm", "cold", "spam"] if c in raw), raw.split()[0] if raw else "cold")
+    except Exception:
+        chosen = "cold"
+
+    avg_score = sum(n["score"] for n in neighbors) / max(1, len(neighbors))
+    return ClassifyResponse(label=chosen, score=avg_score, neighbors=neighbors)
