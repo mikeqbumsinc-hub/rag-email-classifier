@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-pydantic
 cohere
-pinecone
+pinecone-client
 python-dotenv
