@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Request
 import traceback
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+# ... your other imports (cohere, Pinecone, etc.)
 
 app = FastAPI(debug=True)
 
@@ -9,7 +11,18 @@ async def log_exceptions(request: Request, call_next):
         return await call_next(request)
     except Exception:
         print("[ERROR] Internal exception:\n", traceback.format_exc())
-        raise
+        raise  # to allow FastAPI / default error handler to respond
+
+class Req(BaseModel):
+    text: str
+
+@app.post("/classify")
+async def classify(req: Req):
+    try:
+        # existing classify logic
+    except Exception as e:
+        print("[ERROR during classify] ▶", repr(e))
+        raise HTTPException(status_code=500, detail="Internal error occurred")
         
 import os
 import json
