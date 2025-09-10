@@ -1,3 +1,16 @@
+from fastapi import FastAPI, Request
+import traceback
+
+app = FastAPI(debug=True)
+
+@app.middleware("http")
+async def log_exceptions(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        print("[ERROR] Internal exception:\n", traceback.format_exc())
+        raise
+        
 import os
 import json
 from fastapi import FastAPI, HTTPException
