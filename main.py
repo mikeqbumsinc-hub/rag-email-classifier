@@ -15,7 +15,7 @@ TOP_K = 3
 
 # --- INITIALIZE CLIENTS ---
 app = FastAPI()
-co = cohere.Client(api_key=COHERE_API_KEY)
+co = cohere.Client(COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # Ensure index exists
@@ -54,7 +54,7 @@ def load_and_index_examples():
         model="embed-english-v3.0",
         texts=texts,
         input_type="search_document"
-    ).embeddings  # <-- FIXED: no .float
+    ).embeddings
 
     to_upsert = []
     for i, d in enumerate(docs):
@@ -65,7 +65,6 @@ def load_and_index_examples():
         index.upsert(vectors=to_upsert)
         print(f"✅ Upserted {len(to_upsert)} examples to Pinecone index.")
 
-# Run once on startup
 @app.on_event("startup")
 def startup_event():
     load_and_index_examples()
@@ -83,26 +82,24 @@ def classify(req: Req):
             model="embed-english-v3.0",
             texts=[req.text],
             input_type="search_query"
-        ).embeddings[0]  # <-- FIXED: take the first embedding only
+        ).embeddings[0]
 
         res = index.query(vector=q_emb, top_k=TOP_K, include_metadata=True)
         docs = [
             {
-                "text": match["metadata"]["text"],
-                "label": match["metadata"]["label"],
-                "score": match["score"],
+                "text": match.metadata["text"],
+                "label": match.metadata["label"],
+                "score": match.score,
             }
-            for match in res["matches"]
+            for match in res.matches
         ]
 
-        # Use Cohere Chat to classify based on examples
+        # Pass retrieved docs into Cohere Chat
         response = co.chat(
             model="command-r-plus",
-            message=f"Classify this email: {req.text}",
-            documents=[
-                {"data": {"text": doc["text"], "label": doc["label"]}}
-                for doc in docs
-            ]
+            message=f"Classify this email:\n{req.text}\n\n"
+                    f"Here are some examples:\n" +
+                    "\n".join([f"- {d['text']} (label: {d['label']})" for d in docs])
         )
 
         label = response.text.strip()
