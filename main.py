@@ -1,32 +1,44 @@
 import os
 import json
-from fastapi import FastAPI, HTTPException
+import traceback
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from typing import List
 import cohere
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 
-# --- Load environment variables ---
+# --- CONFIGURATION ---
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "email-classifier-index")
-TRAIN_DATA_PATH = os.getenv("TRAIN_DATA_PATH", "cohere_training_data.jsonl")
-TOP_K = int(os.getenv("TOP_K", 5))
+INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "email-classifier-index")
+TRAIN_DATA_PATH = "cohere_training_data.jsonl"
+TOP_K = 3
 
-# --- Init clients ---
+# --- INITIALIZE CLIENTS ---
+app = FastAPI()
 co = cohere.Client(api_key=COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX_NAME)
 
-app = FastAPI()
+# Ensure index exists
+if INDEX_NAME not in pc.list_indexes().names():
+    pc.create_index(
+        name=INDEX_NAME,
+        dimension=1024,  # Cohere embed-english-v3.0 has 1024 dims
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+    )
 
+index = pc.Index(INDEX_NAME)
 
-# --- Request Model ---
-class Req(BaseModel):
-    text: str
+# --- MIDDLEWARE for logging ---
+@app.middleware("http")
+async def log_exceptions(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        print("[ERROR] Internal exception:\n", traceback.format_exc())
+        raise
 
-
-# --- Load & Index Training Data ---
+# --- LOAD & INDEX TRAINING DATA ---
 def load_and_index_examples():
     if not os.path.exists(TRAIN_DATA_PATH):
         print("⚠️ Training data file not found, skipping indexing.")
@@ -38,13 +50,11 @@ def load_and_index_examples():
             docs.append(json.loads(ln))
 
     texts = [d["text"] for d in docs]
-
-    # ✅ Cohere v4 embeddings return object → use .float
     embeds = co.embed(
-        model="embed-english-v3.0",  # or embed-multilingual-v3.0 if needed
+        model="embed-english-v3.0",
         texts=texts,
         input_type="search_document"
-    ).embeddings.float
+    ).embeddings  # <-- FIXED: no .float
 
     to_upsert = []
     for i, d in enumerate(docs):
@@ -55,46 +65,49 @@ def load_and_index_examples():
         index.upsert(vectors=to_upsert)
         print(f"✅ Upserted {len(to_upsert)} examples to Pinecone index.")
 
-
-# Run indexing on startup
+# Run once on startup
 @app.on_event("startup")
 def startup_event():
     load_and_index_examples()
 
+# --- Pydantic model ---
+class Req(BaseModel):
+    text: str
 
-# --- Classify Route ---
+# --- CLASSIFY ROUTE ---
 @app.post("/classify")
 def classify(req: Req):
     try:
-        # ✅ Embed query properly with .float
+        # Embed query
         q_emb = co.embed(
             model="embed-english-v3.0",
             texts=[req.text],
             input_type="search_query"
-        ).embeddings.float[0]
+        ).embeddings[0]  # <-- FIXED: take the first embedding only
 
         res = index.query(vector=q_emb, top_k=TOP_K, include_metadata=True)
         docs = [
-            {"text": match.metadata["text"], "label": match.metadata["label"], "score": match.score}
+            {
+                "text": match["metadata"]["text"],
+                "label": match["metadata"]["label"],
+                "score": match["score"],
+            }
             for match in res["matches"]
         ]
 
-        # Use Cohere chat to refine classification
+        # Use Cohere Chat to classify based on examples
         response = co.chat(
             model="command-r-plus",
-            messages=[{"role": "user", "content": f"Classify this email into a single label only: {req.text}"}],
-            documents=[{"data": {"text": doc["text"], "label": doc["label"]}} for doc in docs]
+            message=f"Classify this email: {req.text}",
+            documents=[
+                {"data": {"text": doc["text"], "label": doc["label"]}}
+                for doc in docs
+            ]
         )
 
-        label = response.message.content[0].text.strip()
+        label = response.text.strip()
         return {"label": label, "examples": docs}
 
     except Exception as e:
         print("[ERROR during classify] ▶", repr(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# --- Health Check Route ---
-@app.get("/")
-def root():
-    return {"status": "ok", "message": "Email Classifier API is running!"}
+        raise HTTPException(status_code=500, detail="Internal error occurred")
