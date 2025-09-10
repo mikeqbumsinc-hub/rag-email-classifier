@@ -9,8 +9,8 @@ from pinecone import Pinecone
 # --- Load environment variables ---
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "email-classifier")
-TRAIN_DATA_PATH = os.getenv("TRAIN_DATA_PATH", "training_data.jsonl")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "email-classifier-index")
+TRAIN_DATA_PATH = os.getenv("TRAIN_DATA_PATH", "cohere_training_data.jsonl")
 TOP_K = int(os.getenv("TOP_K", 3))
 
 # --- Init clients ---
