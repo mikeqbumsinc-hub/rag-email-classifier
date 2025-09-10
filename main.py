@@ -1,33 +1,8 @@
 import traceback
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-# ... your other imports (cohere, Pinecone, etc.)
-
-app = FastAPI(debug=True)
-
-@app.middleware("http")
-async def log_exceptions(request: Request, call_next):
-    try:
-        return await call_next(request)
-    except Exception:
-        print("[ERROR] Internal exception:\n", traceback.format_exc())
-        raise  # to allow FastAPI / default error handler to respond
-
-class Req(BaseModel):
-    text: str
-
-@app.post("/classify")
-async def classify(req: Req):
-    try:
-        # existing classify logic
-    except Exception as e:
-        print("[ERROR during classify] ▶", repr(e))
-        raise HTTPException(status_code=500, detail="Internal error occurred")
-        
 import os
 import json
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 import cohere
 from pinecone import Pinecone, ServerlessSpec
 
@@ -39,20 +14,26 @@ TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
 
 # --- INITIALIZE CLIENTS ---
-app = FastAPI()
+app = FastAPI(debug=True)
 co = cohere.ClientV2(api_key=COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# Middleware to log errors
+@app.middleware("http")
+async def log_exceptions(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        print("[ERROR] Internal exception:\n", traceback.format_exc())
+        raise
 
 # Create index if it doesn’t exist
 if INDEX_NAME not in pc.list_indexes().names():
     pc.create_index(
         name=INDEX_NAME,
-        dimension=1536,  # Cohere/OpenAI embedding size
+        dimension=1536,
         metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws",
-            region="us-east-1"  # can be changed if needed
-        )
+        spec=ServerlessSpec(cloud="aws", region="us-east-1")
     )
 
 index = pc.Index(INDEX_NAME)
@@ -95,7 +76,6 @@ class Req(BaseModel):
 @app.post("/classify")
 def classify(req: Req):
     try:
-        # Embed query
         q_emb = co.embed(
             model="embed-vanilla-002",
             texts=[req.text],
