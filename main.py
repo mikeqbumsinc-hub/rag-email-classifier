@@ -1,8 +1,8 @@
+import os
+import json
 import traceback
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-import os
-import json
 import cohere
 from pinecone import Pinecone, ServerlessSpec
 
@@ -18,27 +18,30 @@ app = FastAPI(debug=True)
 co = cohere.ClientV2(api_key=COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Middleware to log errors
+# Middleware to log server-side errors
 @app.middleware("http")
 async def log_exceptions(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception:
         print("[ERROR] Internal exception:\n", traceback.format_exc())
-        raise
+        raise  # Let FastAPI handle the error response
 
-# Create index if it doesn’t exist
+# --- Ensure Pinecone index exists ---
 if INDEX_NAME not in pc.list_indexes().names():
     pc.create_index(
         name=INDEX_NAME,
-        dimension=1536,
+        dimension=1024,  # ✅ v3 embeddings are 1024 dims
         metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+        spec=ServerlessSpec(
+            cloud="aws",
+            region="us-east-1"  # adjust if needed
+        )
     )
 
 index = pc.Index(INDEX_NAME)
 
-# --- LOAD & INDEX EXAMPLES ---
+# --- LOAD & INDEX TRAINING DATA ---
 def load_and_index_examples():
     if not os.path.exists(TRAIN_DATA_PATH):
         print("⚠️ Training data file not found, skipping indexing.")
@@ -50,11 +53,12 @@ def load_and_index_examples():
             docs.append(json.loads(ln))
     
     texts = [d["text"] for d in docs]
+
+    # ✅ Use Cohere v3 embeddings
     embeds = co.embed(
-        model="embed-vanilla-002",
+        model="embed-english-v3.0",      # or "embed-multilingual-v3.0"
         texts=texts,
-        input_type="search_document",
-        embedding_types=["float"]
+        input_type="search_document"
     ).embeddings
 
     to_upsert = []
@@ -68,7 +72,7 @@ def load_and_index_examples():
 
 load_and_index_examples()
 
-# --- Pydantic model ---
+# --- REQUEST MODEL ---
 class Req(BaseModel):
     text: str
 
@@ -76,11 +80,11 @@ class Req(BaseModel):
 @app.post("/classify")
 def classify(req: Req):
     try:
+        # ✅ Embed query
         q_emb = co.embed(
-            model="embed-vanilla-002",
+            model="embed-english-v3.0",   # or "embed-multilingual-v3.0"
             texts=[req.text],
-            input_type="query",
-            embedding_types=["float"]
+            input_type="search_query"
         ).embeddings
 
         res = index.query(vector=q_emb[0], top_k=TOP_K, include_metadata=True)
@@ -89,14 +93,17 @@ def classify(req: Req):
             for match in res["matches"]
         ]
 
+        # Use Cohere chat to refine classification
         response = co.chat(
-            model="command-a-03-2025",
-            messages=[{"role": "user", "content": f"Classify this email: {req.text}"}],
+            model="command-r-plus",   # ✅ stable v3 chat model
+            messages=[{"role": "user", "content": f"Classify this email into a single label only: {req.text}"}],
             documents=[{"data": {"text": doc["text"], "label": doc["label"]}} for doc in docs]
         )
 
+        # Extract label cleanly
         label = response.message.content[0].text.strip()
         return {"label": label, "examples": docs}
     
     except Exception as e:
+        print("[ERROR during classify] ▶", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
