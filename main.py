@@ -6,8 +6,6 @@ from pydantic import BaseModel
 import cohere
 # We remove 'NotFoundError' from the main import to fix the ImportError
 from pinecone import Pinecone, ServerlessSpec
-# We import exceptions here instead, if needed, but rely on generic Exception for safety
-from pinecone.core.client.exceptions import PineconeException 
 
 # --- CONFIGURATION ---
 # NOTE: Ensure COHERE_API_KEY, PINECONE_API_KEY, and PINECONE_INDEX are set on Render
