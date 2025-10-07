@@ -4,31 +4,33 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import cohere
-from pinecone import Pinecone, ServerlessSpec, NotFoundError
+# We remove 'NotFoundError' from the main import to fix the ImportError
+from pinecone import Pinecone, ServerlessSpec
+# We import exceptions here instead, if needed, but rely on generic Exception for safety
+from pinecone.core.client.exceptions import PineconeException 
 
 # --- CONFIGURATION ---
-# NOTE: Ensure these environment variables (PINECONE_API_KEY, COHERE_API_KEY, PINECONE_INDEX) 
-# are set correctly on your Render service dashboard.
+# NOTE: Ensure COHERE_API_KEY, PINECONE_API_KEY, and PINECONE_INDEX are set on Render
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") # CORRECTED: using PINECONE_INDEX
+# CORRECTED: Using PINECONE_INDEX to match your .env file
+INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") 
 TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
 
 # --- INITIALIZE CLIENTS ---
 app = FastAPI()
-# NOTE: Cohere key check is crucial here
 co = cohere.Client(COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # --- DEPENDENCY INJECTION / LAZY INDEX INITIALIZATION ---
-# This function is run for every request that uses it, ensuring the index object 
-# is available to the worker process and robust against session loss.
+# This function runs when the /classify endpoint is hit, guaranteeing the index 
+# object is fresh and available to the current worker process.
 def get_pinecone_index():
     """Returns the Pinecone Index object, ensuring it exists."""
     try:
         # 1. Ensure Pinecone connection and index status
-        if INDEX_NAME not in pc.list_indexes().names():
+        if INDEX_NAME not in pc.list_indexes().names:
             pc.create_index(
                 name=INDEX_NAME,
                 dimension=1024,
@@ -39,31 +41,30 @@ def get_pinecone_index():
         # 2. Return the Index object for the request
         return pc.Index(INDEX_NAME)
     
-    except NotFoundError as e:
-        print(f"[Pinecone Error] Index initialization failed: {e}")
-        # Raise an HTTPException to stop the request and send a 500
+    # Catch any connection/initialization error and re-raise as a server error
+    except Exception as e: 
+        print(f"[Pinecone Init Error] Initialization failed: {e}")
         raise HTTPException(status_code=500, detail="Vector DB connection failed on startup/init.")
-    except Exception as e:
-        print(f"[Critical Error] Initialization failed: {e}")
-        raise HTTPException(status_code=500, detail="Service initialization failed.")
 
 
-# --- MIDDLEWARE for logging (Good practice) ---
+# --- MIDDLEWARE for logging ---
 @app.middleware("http")
 async def log_exceptions(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception:
-        # Only log uncaught exceptions that didn't go through the route's handler
         print("[ERROR] Internal exception:\n", traceback.format_exc())
         raise
 
 # --- LOAD & INDEX TRAINING DATA (Runs once on service start) ---
 def load_and_index_examples():
     """Load data and upsert to Pinecone."""
-    # We call get_pinecone_index() here to trigger the initial index creation/check
-    # This also performs the upsert
-    index = get_pinecone_index() 
+    # We call the index getter here to trigger the initial index creation/check
+    try:
+        index = get_pinecone_index()
+    except HTTPException:
+        print("⚠️ Skipping indexing due to Pinecone connection error during startup.")
+        return
     
     if not os.path.exists(TRAIN_DATA_PATH):
         print("⚠️ Training data file not found, skipping indexing.")
@@ -76,7 +77,6 @@ def load_and_index_examples():
 
     texts = [d["text"] for d in docs]
     
-    # Check for empty data before embedding
     if not texts:
         print("No training texts to embed. Skipping upsert.")
         return
@@ -101,12 +101,12 @@ def load_and_index_examples():
 def startup_event():
     load_and_index_examples()
 
-# --- Pydantic model (unchanged) ---
+# --- Pydantic model ---
 class Req(BaseModel):
     text: str
 
 # --- CLASSIFY ROUTE ---
-# NOTE: The index parameter is injected by FastAPI's Depends()
+# The index object is passed by FastAPI's Depends()
 @app.post("/classify")
 def classify(req: Req, index = Depends(get_pinecone_index)):
     try:
@@ -118,7 +118,6 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         ).embeddings[0]
 
         # 2. Query Pinecone (Now guaranteed to have a valid index object)
-        # The NotFoundError should no longer occur here.
         res = index.query(vector=q_emb, top_k=TOP_K, include_metadata=True)
         docs = [
             {
@@ -137,21 +136,19 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
                     "\n".join([f"- {d['text']} (label: {d['label']})" for d in docs])
         )
 
-        label = response.text.strip()
-        # Ensure the label is clean for Make.com's Router
-        clean_label = label.lower().strip().split()[0].replace('.', '')
+        label = response.text
+        # Clean the label to ensure Make.com's Router works cleanly (e.g., removing any extra formatting)
+        clean_label = label.lower().strip().split()[0].replace('.', '').replace(':', '')
         
         return {"label": clean_label, "examples": docs}
 
-    except NotFoundError as e:
-        # Catch Pinecone errors specifically
-        print(f"[ERROR during classify - Pinecone] ▶ {repr(e)}")
-        raise HTTPException(status_code=500, detail="Vector search failed.")
+    # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
     except cohere.errors.CohereAPIError as e:
-        # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
         print(f"[ERROR during classify - Cohere] ▶ {repr(e)}")
-        raise HTTPException(status_code=500, detail="AI service (Cohere) failed to respond. Check API key/limits.")
+        # NOTE: If your key is old/trial, this is the error you might see next!
+        raise HTTPException(status_code=500, detail="AI service (Cohere) failed. Check API key/limits.")
+        
+    # Catch any remaining Pinecone/Network errors
     except Exception as e:
-        # Catch all other unhandled exceptions
         print(f"[ERROR during classify - Unhandled] ▶ {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="An internal server error occurred during classification.")
