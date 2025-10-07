@@ -1,45 +1,70 @@
 import os
 import json
 import traceback
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import cohere
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec, NotFoundError
 
 # --- CONFIGURATION ---
+# NOTE: Ensure these environment variables (PINECONE_API_KEY, COHERE_API_KEY, PINECONE_INDEX) 
+# are set correctly on your Render service dashboard.
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index")
+INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") # CORRECTED: using PINECONE_INDEX
 TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
 
 # --- INITIALIZE CLIENTS ---
 app = FastAPI()
+# NOTE: Cohere key check is crucial here
 co = cohere.Client(COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Ensure index exists
-if INDEX_NAME not in pc.list_indexes().names():
-    pc.create_index(
-        name=INDEX_NAME,
-        dimension=1024,  # Cohere embed-english-v3.0 has 1024 dims
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1")
-    )
+# --- DEPENDENCY INJECTION / LAZY INDEX INITIALIZATION ---
+# This function is run for every request that uses it, ensuring the index object 
+# is available to the worker process and robust against session loss.
+def get_pinecone_index():
+    """Returns the Pinecone Index object, ensuring it exists."""
+    try:
+        # 1. Ensure Pinecone connection and index status
+        if INDEX_NAME not in pc.list_indexes().names():
+            pc.create_index(
+                name=INDEX_NAME,
+                dimension=1024,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1")
+            )
+        
+        # 2. Return the Index object for the request
+        return pc.Index(INDEX_NAME)
+    
+    except NotFoundError as e:
+        print(f"[Pinecone Error] Index initialization failed: {e}")
+        # Raise an HTTPException to stop the request and send a 500
+        raise HTTPException(status_code=500, detail="Vector DB connection failed on startup/init.")
+    except Exception as e:
+        print(f"[Critical Error] Initialization failed: {e}")
+        raise HTTPException(status_code=500, detail="Service initialization failed.")
 
-index = pc.Index(INDEX_NAME)
 
-# --- MIDDLEWARE for logging ---
+# --- MIDDLEWARE for logging (Good practice) ---
 @app.middleware("http")
 async def log_exceptions(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception:
+        # Only log uncaught exceptions that didn't go through the route's handler
         print("[ERROR] Internal exception:\n", traceback.format_exc())
         raise
 
-# --- LOAD & INDEX TRAINING DATA ---
+# --- LOAD & INDEX TRAINING DATA (Runs once on service start) ---
 def load_and_index_examples():
+    """Load data and upsert to Pinecone."""
+    # We call get_pinecone_index() here to trigger the initial index creation/check
+    # This also performs the upsert
+    index = get_pinecone_index() 
+    
     if not os.path.exists(TRAIN_DATA_PATH):
         print("⚠️ Training data file not found, skipping indexing.")
         return
@@ -50,6 +75,12 @@ def load_and_index_examples():
             docs.append(json.loads(ln))
 
     texts = [d["text"] for d in docs]
+    
+    # Check for empty data before embedding
+    if not texts:
+        print("No training texts to embed. Skipping upsert.")
+        return
+        
     embeds = co.embed(
         model="embed-english-v3.0",
         texts=texts,
@@ -65,25 +96,29 @@ def load_and_index_examples():
         index.upsert(vectors=to_upsert)
         print(f"✅ Upserted {len(to_upsert)} examples to Pinecone index.")
 
+# --- STARTUP EVENT ---
 @app.on_event("startup")
 def startup_event():
     load_and_index_examples()
 
-# --- Pydantic model ---
+# --- Pydantic model (unchanged) ---
 class Req(BaseModel):
     text: str
 
 # --- CLASSIFY ROUTE ---
+# NOTE: The index parameter is injected by FastAPI's Depends()
 @app.post("/classify")
-def classify(req: Req):
+def classify(req: Req, index = Depends(get_pinecone_index)):
     try:
-        # Embed query
+        # 1. Embed query
         q_emb = co.embed(
             model="embed-english-v3.0",
             texts=[req.text],
             input_type="search_query"
         ).embeddings[0]
 
+        # 2. Query Pinecone (Now guaranteed to have a valid index object)
+        # The NotFoundError should no longer occur here.
         res = index.query(vector=q_emb, top_k=TOP_K, include_metadata=True)
         docs = [
             {
@@ -94,7 +129,7 @@ def classify(req: Req):
             for match in res.matches
         ]
 
-        # Pass retrieved docs into Cohere Chat
+        # 3. Pass retrieved docs into Cohere Chat
         response = co.chat(
             model="command-r-plus",
             message=f"Classify this email:\n{req.text}\n\n"
@@ -103,8 +138,20 @@ def classify(req: Req):
         )
 
         label = response.text.strip()
-        return {"label": label, "examples": docs}
+        # Ensure the label is clean for Make.com's Router
+        clean_label = label.lower().strip().split()[0].replace('.', '')
+        
+        return {"label": clean_label, "examples": docs}
 
+    except NotFoundError as e:
+        # Catch Pinecone errors specifically
+        print(f"[ERROR during classify - Pinecone] ▶ {repr(e)}")
+        raise HTTPException(status_code=500, detail="Vector search failed.")
+    except cohere.errors.CohereAPIError as e:
+        # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
+        print(f"[ERROR during classify - Cohere] ▶ {repr(e)}")
+        raise HTTPException(status_code=500, detail="AI service (Cohere) failed to respond. Check API key/limits.")
     except Exception as e:
-        print("[ERROR during classify] ▶", repr(e))
-        raise HTTPException(status_code=500, detail="Internal error occurred")
+        # Catch all other unhandled exceptions
+        print(f"[ERROR during classify - Unhandled] ▶ {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred during classification.")
