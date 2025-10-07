@@ -28,7 +28,7 @@ def get_pinecone_index():
     """Returns the Pinecone Index object, ensuring it exists."""
     try:
         # 1. Ensure Pinecone connection and index status
-        if INDEX_NAME not in pc.list_indexes().names:
+        if INDEX_NAME not in pc.list_indexes().names():
             pc.create_index(
                 name=INDEX_NAME,
                 dimension=1024,
