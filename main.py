@@ -9,7 +9,7 @@ from pinecone import Pinecone, ServerlessSpec
 # --- CONFIGURATION ---
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "email-classifier-index")
+INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index")
 TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
 
