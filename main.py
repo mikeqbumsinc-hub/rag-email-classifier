@@ -4,14 +4,12 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import cohere
-from cohere.core.errors import CohereAPIError
-from pinecone import Pinecone, ServerlessSpec
+# REMOVED: from cohere.core.errors import CohereAPIError # FIXES DEPLOYMENT CRASH
+from pinecone import Pinecone, ServerlessSpec 
 
 # --- CONFIGURATION ---
-# NOTE: Ensure COHERE_API_KEY, PINECONE_API_KEY, and PINECONE_INDEX are set on Render
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-# CORRECTED: Using PINECONE_INDEX to match your .env file
 INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") 
 TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
@@ -22,24 +20,19 @@ co = cohere.Client(COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # --- DEPENDENCY INJECTION / LAZY INDEX INITIALIZATION ---
-# This function runs when the /classify endpoint is hit, guaranteeing the index 
-# object is fresh and available to the current worker process.
 def get_pinecone_index():
     """Returns the Pinecone Index object, ensuring it exists."""
     try:
-        # 1. Ensure Pinecone connection and index status
-        if INDEX_NAME not in pc.list_indexes().names():
+        # Parentheses fix is critical here
+        if INDEX_NAME not in pc.list_indexes().names(): 
             pc.create_index(
                 name=INDEX_NAME,
                 dimension=1024,
                 metric="cosine",
                 spec=ServerlessSpec(cloud="aws", region="us-east-1")
             )
-        
-        # 2. Return the Index object for the request
         return pc.Index(INDEX_NAME)
     
-    # Catch any connection/initialization error and re-raise as a server error
     except Exception as e: 
         print(f"[Pinecone Init Error] Initialization failed: {e}")
         raise HTTPException(status_code=500, detail="Vector DB connection failed on startup/init.")
@@ -57,7 +50,6 @@ async def log_exceptions(request: Request, call_next):
 # --- LOAD & INDEX TRAINING DATA (Runs once on service start) ---
 def load_and_index_examples():
     """Load data and upsert to Pinecone."""
-    # We call the index getter here to trigger the initial index creation/check
     try:
         index = get_pinecone_index()
     except HTTPException:
@@ -104,7 +96,6 @@ class Req(BaseModel):
     text: str
 
 # --- CLASSIFY ROUTE ---
-# The index object is passed by FastAPI's Depends()
 @app.post("/classify")
 def classify(req: Req, index = Depends(get_pinecone_index)):
     try:
@@ -115,7 +106,7 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
             input_type="search_query"
         ).embeddings[0]
 
-        # 2. Query Pinecone (Now guaranteed to have a valid index object)
+        # 2. Query Pinecone
         res = index.query(vector=q_emb, top_k=TOP_K, include_metadata=True)
         docs = [
             {
@@ -135,17 +126,16 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         )
 
         label = response.text
-        # Clean the label to ensure Make.com's Router works cleanly (e.g., removing any extra formatting)
         clean_label = label.lower().strip().split()[0].replace('.', '').replace(':', '')
         
         return {"label": clean_label, "examples": docs}
 
-    # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
-    except CohereAPIError as e:  # Using the directly imported exception name
+    # FINAL COHERE EXCEPTION CATCH
+    except cohere.CohereError as e:  # Using the base exception from the cohere module
         print(f"[ERROR during classify - Cohere API] ▶ {repr(e)}")
-        # NOTE: If your key is old/trial, this is the error you might see next!
+        # If the key is invalid or a rate limit is hit, this will catch it
         raise HTTPException(status_code=500, detail="AI service (Cohere) failed. Check API key/limits.")
-
+        
     # Catch any remaining Pinecone/Network errors
     except Exception as e:
         print(f"[ERROR during classify - Unhandled] ▶ {traceback.format_exc()}")
