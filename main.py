@@ -141,8 +141,8 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         return {"label": clean_label, "examples": docs}
 
     # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
-    except cohere.errors.CohereAPIError as e:
-        print(f"[ERROR during classify - Cohere] ▶ {repr(e)}")
+    except cohere.APIError as e:  # CHANGED to cohere.APIError
+        print(f"[ERROR during classify - Cohere API] ▶ {repr(e)}")
         # NOTE: If your key is old/trial, this is the error you might see next!
         raise HTTPException(status_code=500, detail="AI service (Cohere) failed. Check API key/limits.")
         
