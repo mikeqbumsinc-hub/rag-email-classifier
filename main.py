@@ -4,7 +4,7 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import cohere
-# We remove 'NotFoundError' from the main import to fix the ImportError
+from cohere.core.errors import CohereAPIError
 from pinecone import Pinecone, ServerlessSpec
 
 # --- CONFIGURATION ---
@@ -141,11 +141,11 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         return {"label": clean_label, "examples": docs}
 
     # Catch Cohere API errors (e.g., 401 invalid key, 429 rate limit)
-    except cohere.APIError as e:  # CHANGED to cohere.APIError
+    except CohereAPIError as e:  # Using the directly imported exception name
         print(f"[ERROR during classify - Cohere API] ▶ {repr(e)}")
         # NOTE: If your key is old/trial, this is the error you might see next!
         raise HTTPException(status_code=500, detail="AI service (Cohere) failed. Check API key/limits.")
-        
+
     # Catch any remaining Pinecone/Network errors
     except Exception as e:
         print(f"[ERROR during classify - Unhandled] ▶ {traceback.format_exc()}")
