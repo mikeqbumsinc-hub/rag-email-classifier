@@ -4,10 +4,10 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import cohere
-# REMOVED: from cohere.core.errors import CohereAPIError # FIXES DEPLOYMENT CRASH
 from pinecone import Pinecone, ServerlessSpec 
 
 # --- CONFIGURATION ---
+# NOTE: Ensure COHERE_API_KEY, PINECONE_API_KEY, and PINECONE_INDEX are set on Render
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") 
@@ -20,10 +20,11 @@ co = cohere.Client(COHERE_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # --- DEPENDENCY INJECTION / LAZY INDEX INITIALIZATION ---
+# This function is used to securely initialize the Pinecone index object per request.
 def get_pinecone_index():
     """Returns the Pinecone Index object, ensuring it exists."""
     try:
-        # Parentheses fix is critical here
+        # FIX: Added parentheses to .names() and relying on robust Exception catch
         if INDEX_NAME not in pc.list_indexes().names(): 
             pc.create_index(
                 name=INDEX_NAME,
@@ -35,6 +36,7 @@ def get_pinecone_index():
     
     except Exception as e: 
         print(f"[Pinecone Init Error] Initialization failed: {e}")
+        # Fail gracefully on initialization
         raise HTTPException(status_code=500, detail="Vector DB connection failed on startup/init.")
 
 
@@ -99,6 +101,9 @@ class Req(BaseModel):
 @app.post("/classify")
 def classify(req: Req, index = Depends(get_pinecone_index)):
     try:
+        # LOGGING CHECKPOINT: This will print if the API Key is valid and connection begins.
+        print("INFO: Starting Cohere embedding call...")
+        
         # 1. Embed query
         q_emb = co.embed(
             model="embed-english-v3.0",
@@ -128,15 +133,18 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         label = response.text
         clean_label = label.lower().strip().split()[0].replace('.', '').replace(':', '')
         
+        # SUCCESS
         return {"label": clean_label, "examples": docs}
 
-    # FINAL COHERE EXCEPTION CATCH
-    except cohere.CohereError as e:  # Using the base exception from the cohere module
-        print(f"[ERROR during classify - Cohere API] ▶ {repr(e)}")
-        # If the key is invalid or a rate limit is hit, this will catch it
-        raise HTTPException(status_code=500, detail="AI service (Cohere) failed. Check API key/limits.")
-        
-    # Catch any remaining Pinecone/Network errors
+    # FINAL ROBUST EXCEPTION CATCH (This handles all Cohere errors and others)
     except Exception as e:
+        error_detail = str(e)
+        
+        # Check specifically for Cohere authentication/rate limit errors
+        if "api_key" in error_detail.lower() or "unauthorized" in error_detail.lower() or "rate_limit" in error_detail.lower():
+            print(f"[CRITICAL ERROR] Cohere API Key/Limit Failure: {error_detail}")
+            raise HTTPException(status_code=500, detail="AI Service Failed: Check API Key and Usage Limits.")
+        
+        # All other unhandled exceptions
         print(f"[ERROR during classify - Unhandled] ▶ {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="An internal server error occurred during classification.")
