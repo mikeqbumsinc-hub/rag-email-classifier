@@ -9,6 +9,7 @@ from pinecone import Pinecone, ServerlessSpec
 # --- CONFIGURATION ---
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+# CORRECTED: Using PINECONE_INDEX to match your .env file
 INDEX_NAME = os.getenv("PINECONE_INDEX", "email-classifier-index") 
 TRAIN_DATA_PATH = "cohere_training_data.jsonl"
 TOP_K = 3
@@ -22,7 +23,7 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 def get_pinecone_index():
     """Returns the Pinecone Index object, ensuring it exists."""
     try:
-        # Check if index exists (using .names() with parentheses, fixed)
+        # FIX: Using .names() method and relying on Exception catch for robustness
         if INDEX_NAME not in pc.list_indexes().names(): 
             pc.create_index(
                 name=INDEX_NAME,
@@ -71,7 +72,7 @@ def load_and_index_examples():
         return
         
     embeds = co.embed(
-        model="embed-english-v3.0",
+        model="embed-english-v3.0", # FIX: Using correct hyphenated model name
         texts=texts,
         input_type="search_document"
     ).embeddings
@@ -102,7 +103,7 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
         
         # 1. Embed query
         q_emb = co.embed(
-            model="embed-english-v3.0",
+            model="embed-english-v3.0", # FIX: Using correct hyphenated model name
             texts=[req.text],
             input_type="search_query"
         ).embeddings[0]
@@ -118,26 +119,42 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
             for match in res.matches
         ]
 
-        # 3. Pass retrieved docs into Cohere Chat
+        # 3. Pass retrieved docs into Cohere Chat - IMPROVED PROMPT
         response = co.chat(
-            model="command-r-plus-08-2024", # FIX: Changed from retired 'command-r-plus'
-            message=f"Classify this email:\n{req.text}\n\n"
-                    f"Here are some examples:\n" +
-                    "\n".join([f"- {d['text']} (label: {d['label']})" for d in docs])
+            # FIX: Using supported versioned chat model
+            model="command-r-plus-08-2024", 
+            message=(
+                f"You are an expert email classifier. Your task is to classify the following email."
+                f"Based on the provided examples (RAG results), respond with ONLY ONE WORD: 'warm', 'cold', or 'spam'."
+                f"Do NOT include any other text, punctuation, or explanation."
+                f"\n\n--- EMAIL TO CLASSIFY ---\n{req.text}\n"
+                f"\n--- CLASSIFICATION EXAMPLES ---\n"
+                + "\n".join([f"- {d['text']} (Label: {d['label']})" for d in docs])
+            )
         )
 
         label = response.text
-        clean_label = label.lower().strip().split()[0].replace('.', '').replace(':', '')
         
-        # SUCCESS: Returns classification label and supporting examples
-        return {"label": clean_label, "examples": docs}
+        # POST-PROCESSING: Ensures the label is a clean, predictable string for Make.com Router
+        clean_label = label.lower().strip()
+        
+        if 'warm' in clean_label:
+            final_label = 'warm'
+        elif 'cold' in clean_label:
+            final_label = 'cold'
+        elif 'spam' in clean_label:
+            final_label = 'spam'
+        else:
+            final_label = 'cold' # Default fallback if the model fails to follow instructions
 
-    # FINAL ROBUST EXCEPTION CATCH
+        # SUCCESS: Returns classification label and supporting examples
+        return {"label": final_label, "examples": docs}
+
+    # ROBUST EXCEPTION CATCH
     except Exception as e:
         error_detail = str(e)
         
-        # This catch is now essential to report configuration errors
-        if "api_key" in error_detail.lower() or "unauthorized" in error_detail.lower() or "rate_limit" in error_detail.lower():
+        if "api_key" in error_detail.lower() or "unauthorized" in error_detail.lower() or "limit" in error_detail.lower():
             print(f"[CRITICAL ERROR] Cohere API Key/Limit Failure: {error_detail}")
             raise HTTPException(status_code=500, detail="AI Service Failed: Check API Key and Usage Limits.")
         
