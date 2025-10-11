@@ -120,7 +120,7 @@ def classify(req: Req, index = Depends(get_pinecone_index)):
 
         # 3. Pass retrieved docs into Cohere Chat
         response = co.chat(
-            model="command", # FIX: Changed from retired 'command-r-plus'
+            model="command-r-plus-08-2024", # FIX: Changed from retired 'command-r-plus'
             message=f"Classify this email:\n{req.text}\n\n"
                     f"Here are some examples:\n" +
                     "\n".join([f"- {d['text']} (label: {d['label']})" for d in docs])
