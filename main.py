@@ -71,7 +71,7 @@ def load_and_index_examples():
         return
         
     embeds = co.embed(
-        model="embed-english-v3.0",
+        model="embed-english/v3.0",
         texts=texts,
         input_type="search_document"
     ).embeddings
