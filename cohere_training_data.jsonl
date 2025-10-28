@@ -22,6 +22,17 @@
 {"text": "Please arrange a product walkthrough for our team.", "label": "Warm Lead"}
 {"text": "We need a solution urgently, please respond fast.", "label": "Warm Lead"}
 {"text": "I am the decision maker, let us move forward.", "label": "Warm Lead"}
+{"text": "Do you do films?", "label": "Warm Lead"}
+{"text": "Can you do documentaries?", "label": "Warm Lead"}
+{"text": "Request for Quotation", "label": "Warm Lead"}
+{"text": "RFQ", "label": "Warm Lead"}
+{"text": "We are planning a large internal event and need video documentation. Can you send a detailed quote?", "label": "Warm Lead"}
+{"text": "I'm the Marketing Director. I'd like to schedule a call this week to discuss a $50k explainer video project.", "label": "Warm Lead"}
+{"text": "Are you available for a meeting next Tuesday to review a venue setup for an event?", "label": "Warm Lead"}
+{"text": "Please send me your pricing for a 5-minute corporate video, and include recent examples.", "label": "Warm Lead"}
+{"text": "We are looking for a video partner for a product launch in Q4. Can you share your timeline and process?", "label": "Warm Lead"}
+{"text": "I need a video production partner who specializes in corporate AVPs. Please contact me directly.", "label": "Warm Lead"}
+{"text": "What is the next step to get a proposal drafted for a photo/video documentation project?", "label": "Warm Lead"}
 {"text": "Just checking out what you do, no plans yet.", "label": "Cold Lead"}
 {"text": "I'm not sure if this is the right product for us.", "label": "Cold Lead"}
 {"text": "Please stop sending me emails.", "label": "Cold Lead"}
@@ -42,6 +53,11 @@
 {"text": "We're not expanding right now.", "label": "Cold Lead"}
 {"text": "We don't need this kind of product.", "label": "Cold Lead"}
 {"text": "Your service is not aligned with our requirements.", "label": "Cold Lead"}
+{"text": "Do you know who does cheaper event management?", "label": "Cold Lead"}
+{"text": "We saw your work, but our internal team handles video production.", "label": "Cold Lead"}
+{"text": "I was looking for a general price list of all video services, not a quote.", "label": "Cold Lead"}
+{"text": "Are your services available in Cebu? If not, please ignore.", "label": "Cold Lead"}
+{"text": "Just comparing different video agency portfolios, yours looks fine.", "label": "Cold Lead"}
 {"text": "Win a free iPhone now! Click here!", "label": "Spam"}
 {"text": "Congratulations! You've been selected for a prize.", "label": "Spam"}
 {"text": "Get rich quick with this simple trick.", "label": "Spam"}
@@ -56,13 +72,4 @@
 {"text": "Act fast to secure your limited offer.", "label": "Spam"}
 {"text": "Double your income in one week.", "label": "Spam"}
 {"text": "Urgent: verify your account now.", "label": "Spam"}
-{"text": "Cheap loans available instantly.", "label": "Spam"}
-{"text": "You've won a free vacation package.", "label": "Spam"}
-{"text": "Buy followers and likes today.", "label": "Spam"}
-{"text": "Congratulations, you are our lucky winner!", "label": "Spam"}
-{"text": "Click here to claim your exclusive discount.", "label": "Spam"}
-{"text": "This is your last chance to participate.", "label": "Spam"}
-{"text": "Do you do films?", "label": "Warm Lead"}
-{"text": "Can you do documentaries?", "label": "Warm Lead"}
-{"text": "Request for Quotation", "label": "Warm Lead"}
-{"text": "RFQ", "label": "Warm Lead"}
+{"text": "I can guarantee your BUMSinc.net website will rank #1 on Google in 30 days. Click for a free SEO audit.", "label": "Spam"}
